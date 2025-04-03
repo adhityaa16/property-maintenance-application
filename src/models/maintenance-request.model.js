@@ -1,5 +1,7 @@
 const { DataTypes } = require('sequelize');
 const { sequelize } = require('../config/database.config');
+const User = require('./user.model');
+const Property = require('./property.model');
 
 const MaintenanceRequest = sequelize.define('MaintenanceRequest', {
     id: {
@@ -11,7 +13,7 @@ const MaintenanceRequest = sequelize.define('MaintenanceRequest', {
         type: DataTypes.UUID,
         allowNull: false,
         references: {
-            model: 'Properties',
+            model: Property,
             key: 'id'
         }
     },
@@ -19,7 +21,7 @@ const MaintenanceRequest = sequelize.define('MaintenanceRequest', {
         type: DataTypes.UUID,
         allowNull: false,
         references: {
-            model: 'Users',
+            model: User,
             key: 'id'
         }
     },
@@ -27,7 +29,7 @@ const MaintenanceRequest = sequelize.define('MaintenanceRequest', {
         type: DataTypes.UUID,
         allowNull: true,
         references: {
-            model: 'Users',
+            model: User,
             key: 'id'
         }
     },
@@ -69,11 +71,13 @@ const MaintenanceRequest = sequelize.define('MaintenanceRequest', {
     },
     images: {
         type: DataTypes.JSON,
-        allowNull: true
+        allowNull: true,
+        defaultValue: []
     },
     completionPhotos: {
         type: DataTypes.JSON,
-        allowNull: true
+        allowNull: true,
+        defaultValue: []
     },
     estimatedCost: {
         type: DataTypes.DECIMAL(10, 2),
@@ -95,15 +99,23 @@ const MaintenanceRequest = sequelize.define('MaintenanceRequest', {
         type: DataTypes.TEXT,
         allowNull: true
     }
+}, {
+    timestamps: true,
+    underscored: true
 });
+
+// Define relationships
+MaintenanceRequest.belongsTo(Property, { foreignKey: 'propertyId' });
+MaintenanceRequest.belongsTo(User, { as: 'tenant', foreignKey: 'tenantId' });
+MaintenanceRequest.belongsTo(User, { as: 'serviceProvider', foreignKey: 'serviceProviderId' });
 
 // Static methods
 MaintenanceRequest.findByProperty = function(propertyId) {
     return this.findAll({
         where: { propertyId },
         include: [
-            { model: sequelize.models.User, as: 'tenant' },
-            { model: sequelize.models.User, as: 'serviceProvider' }
+            { model: User, as: 'tenant', attributes: ['id', 'firstName', 'lastName', 'email', 'phoneNumber'] },
+            { model: User, as: 'serviceProvider', attributes: ['id', 'firstName', 'lastName', 'email', 'phoneNumber'] }
         ]
     });
 };
@@ -112,8 +124,8 @@ MaintenanceRequest.findByTenant = function(tenantId) {
     return this.findAll({
         where: { tenantId },
         include: [
-            { model: sequelize.models.Property },
-            { model: sequelize.models.User, as: 'serviceProvider' }
+            { model: Property },
+            { model: User, as: 'serviceProvider', attributes: ['id', 'firstName', 'lastName', 'email', 'phoneNumber'] }
         ]
     });
 };
@@ -122,8 +134,8 @@ MaintenanceRequest.findByServiceProvider = function(serviceProviderId) {
     return this.findAll({
         where: { serviceProviderId },
         include: [
-            { model: sequelize.models.Property },
-            { model: sequelize.models.User, as: 'tenant' }
+            { model: Property },
+            { model: User, as: 'tenant', attributes: ['id', 'firstName', 'lastName', 'email', 'phoneNumber'] }
         ]
     });
 };

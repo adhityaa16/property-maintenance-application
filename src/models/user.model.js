@@ -30,12 +30,16 @@ const User = sequelize.define('User', {
         allowNull: false
     },
     role: {
-        type: DataTypes.ENUM('owner', 'tenant', 'service_provider', 'admin'),
-        allowNull: false
+        type: DataTypes.ENUM('admin', 'landlord', 'tenant'),
+        allowNull: false,
+        defaultValue: 'tenant'
     },
-    phoneNumber: {
+    phone: {
         type: DataTypes.STRING,
-        allowNull: true
+        allowNull: true,
+        validate: {
+            is: /^\+?[\d\s-]+$/
+        }
     },
     companyName: {
         type: DataTypes.STRING,
@@ -48,7 +52,26 @@ const User = sequelize.define('User', {
     serviceCategories: {
         type: DataTypes.JSON,
         allowNull: true,
-        defaultValue: []
+        defaultValue: [],
+        validate: {
+            isValidCategories(value) {
+                const validCategories = [
+                    'plumbing',
+                    'electrical',
+                    'hvac',
+                    'appliance',
+                    'structural',
+                    'pest_control',
+                    'other'
+                ];
+                if (!Array.isArray(value)) {
+                    throw new Error('Service categories must be an array');
+                }
+                if (value.some(cat => !validCategories.includes(cat))) {
+                    throw new Error('Invalid service category');
+                }
+            }
+        }
     },
     isVerified: {
         type: DataTypes.BOOLEAN,
@@ -104,7 +127,15 @@ const User = sequelize.define('User', {
     }
 }, {
     hooks: {
-        beforeSave: async (user) => {
+        beforeCreate: async (user) => {
+            if (user.password) {
+                user.password = await bcrypt.hash(user.password, 10);
+            }
+            if (user.role === 'service_provider' && !user.companyName) {
+                throw new Error('Company name is required for service providers');
+            }
+        },
+        beforeUpdate: async (user) => {
             if (user.changed('password')) {
                 user.password = await bcrypt.hash(user.password, 10);
             }
@@ -112,8 +143,75 @@ const User = sequelize.define('User', {
                 user.updatedAt = new Date();
             }
         }
-    }
+    },
+    indexes: [
+        {
+            unique: true,
+            fields: ['email']
+        },
+        {
+            fields: ['role']
+        },
+        {
+            fields: ['isApproved']
+        }
+    ],
+    timestamps: true,
+    underscored: true
 });
+
+// Define relationships
+User.associate = (models) => {
+    User.hasMany(models.Property, { 
+        foreignKey: 'ownerId',
+        as: 'ownedProperties'
+    });
+
+    User.hasMany(models.Property, {
+        foreignKey: 'currentTenantId',
+        as: 'rentedProperties'
+    });
+
+    User.hasMany(models.MaintenanceRequest, {
+        foreignKey: 'tenantId',
+        as: 'submittedRequests'
+    });
+
+    User.hasMany(models.MaintenanceRequest, {
+        foreignKey: 'serviceProviderId',
+        as: 'assignedRequests'
+    });
+
+    User.hasMany(models.Tenant, {
+        foreignKey: 'userId',
+        as: 'tenantInfo'
+    });
+
+    User.hasMany(models.Payment, {
+        foreignKey: 'tenantId',
+        as: 'payments'
+    });
+
+    User.hasMany(models.Chat, {
+        foreignKey: 'senderId',
+        as: 'sentMessages'
+    });
+
+    User.hasMany(models.Chat, {
+        foreignKey: 'receiverId',
+        as: 'receivedMessages'
+    });
+
+    User.hasMany(models.Notification, {
+        foreignKey: 'userId',
+        as: 'notifications'
+    });
+
+    User.hasMany(models.Invitation, {
+        foreignKey: 'ownerId',
+        as: 'sentInvitations'
+    });
+};
 
 // Instance methods
 User.prototype.validatePassword = async function(password) {
@@ -131,6 +229,30 @@ User.prototype.approve = async function(approverId) {
     this.approvedBy = approverId;
     this.approvedAt = new Date();
     await this.save();
+};
+
+User.prototype.isServiceProvider = function() {
+    return this.role === 'service_provider';
+};
+
+User.prototype.isOwner = function() {
+    return this.role === 'owner';
+};
+
+User.prototype.isTenant = function() {
+    return this.role === 'tenant';
+};
+
+User.prototype.isAdmin = function() {
+    return this.role === 'admin';
+};
+
+User.prototype.canHandleCategory = function(category) {
+    return this.isServiceProvider() && this.serviceCategories.includes(category);
+};
+
+User.prototype.getFullName = function() {
+    return `${this.firstName} ${this.lastName}`;
 };
 
 // Static methods
@@ -160,6 +282,19 @@ User.findPendingApprovals = function() {
             role: 'service_provider',
             isApproved: false,
             isActive: true
+        }
+    });
+};
+
+User.findActiveServiceProvidersForCategory = function(category) {
+    return this.findAll({
+        where: {
+            role: 'service_provider',
+            isApproved: true,
+            isActive: true,
+            serviceCategories: {
+                [Sequelize.Op.contains]: [category]
+            }
         }
     });
 };

@@ -1,0 +1,29 @@
+{
+  "development": {
+    "username": "root",
+    "password": "PropertyMaint@2024",
+    "database": "property_maintenance",
+    "host": "127.0.0.1",
+    "port": 3306,
+    "dialect": "mysql",
+    "logging": true
+  },
+  "test": {
+    "username": "root",
+    "password": "PropertyMaint@2024",
+    "database": "property_maintenance_test",
+    "host": "127.0.0.1",
+    "port": 3306,
+    "dialect": "mysql",
+    "logging": false
+  },
+  "production": {
+    "username": "root",
+    "password": "PropertyMaint@2024",
+    "database": "property_maintenance_prod",
+    "host": "127.0.0.1",
+    "port": 3306,
+    "dialect": "mysql",
+    "logging": false
+  }
+} 

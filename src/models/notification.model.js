@@ -3,19 +3,20 @@ const { sequelize } = require('../config/database.config');
 const User = require('./user.model');
 const Property = require('./property.model');
 const MaintenanceRequest = require('./maintenance.model');
+const Tenant = require('./tenant.model');
 
 const Notification = sequelize.define('Notification', {
-    notification_id: {
+    id: {
         type: DataTypes.UUID,
         defaultValue: DataTypes.UUIDV4,
         primaryKey: true
     },
-    user_id: {
+    userId: {
         type: DataTypes.UUID,
         allowNull: false,
         references: {
             model: User,
-            key: 'user_id'
+            key: 'id'
         }
     },
     type: {
@@ -24,97 +25,172 @@ const Notification = sequelize.define('Notification', {
             'maintenance_update',
             'maintenance_assigned',
             'maintenance_completed',
+            'maintenance_cancelled',
             'chat_message',
             'rent_due',
             'rent_overdue',
             'rent_paid',
             'tenant_invitation',
             'tenant_registered',
-            'service_provider_approved'
+            'service_provider_approved',
+            'lease_expiring',
+            'lease_terminated',
+            'property_status_change'
         ),
         allowNull: false
     },
     title: {
         type: DataTypes.STRING,
-        allowNull: false
+        allowNull: false,
+        validate: {
+            len: [1, 255]
+        }
     },
     message: {
         type: DataTypes.TEXT,
-        allowNull: false
+        allowNull: false,
+        validate: {
+            len: [1, 1000]
+        }
     },
-    property_id: {
+    propertyId: {
         type: DataTypes.UUID,
         allowNull: true,
         references: {
             model: Property,
-            key: 'property_id'
+            key: 'id'
         }
     },
-    maintenance_request_id: {
+    maintenanceRequestId: {
         type: DataTypes.UUID,
         allowNull: true,
         references: {
             model: MaintenanceRequest,
-            key: 'request_id'
+            key: 'id'
+        }
+    },
+    tenantId: {
+        type: DataTypes.UUID,
+        allowNull: true,
+        references: {
+            model: Tenant,
+            key: 'id'
         }
     },
     data: {
         type: DataTypes.JSON,
         allowNull: true,
-        defaultValue: {}
+        defaultValue: {},
+        validate: {
+            isValidData(value) {
+                if (value && typeof value !== 'object') {
+                    throw new Error('Data must be a valid JSON object');
+                }
+            }
+        }
     },
-    is_read: {
+    priority: {
+        type: DataTypes.ENUM('low', 'medium', 'high', 'urgent'),
+        defaultValue: 'medium'
+    },
+    isRead: {
         type: DataTypes.BOOLEAN,
         defaultValue: false
     },
-    read_at: {
+    readAt: {
         type: DataTypes.DATE,
-        allowNull: true
+        allowNull: true,
+        validate: {
+            isDate: true
+        }
     },
-    created_at: {
+    expiresAt: {
         type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
-    },
-    updated_at: {
-        type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
-    }
-}, {
-    hooks: {
-        beforeUpdate: (notification) => {
-            notification.updated_at = new Date();
+        allowNull: true,
+        validate: {
+            isDate: true
         }
     }
+}, {
+    timestamps: true,
+    underscored: true,
+    hooks: {
+        beforeCreate: async (notification) => {
+            // Set priority based on type
+            if (['rent_overdue', 'maintenance_emergency'].includes(notification.type)) {
+                notification.priority = 'urgent';
+            } else if (['rent_due', 'maintenance_assigned'].includes(notification.type)) {
+                notification.priority = 'high';
+            }
+
+            // Set expiration for certain types
+            if (['rent_due', 'rent_overdue'].includes(notification.type)) {
+                notification.expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+            }
+        }
+    },
+    indexes: [
+        {
+            fields: ['user_id']
+        },
+        {
+            fields: ['property_id']
+        },
+        {
+            fields: ['maintenance_request_id']
+        },
+        {
+            fields: ['type']
+        },
+        {
+            fields: ['is_read']
+        },
+        {
+            fields: ['priority']
+        }
+    ]
 });
 
 // Define relationships
-Notification.belongsTo(User, { foreignKey: 'user_id' });
-Notification.belongsTo(Property, { foreignKey: 'property_id' });
-Notification.belongsTo(MaintenanceRequest, { foreignKey: 'maintenance_request_id' });
+Notification.belongsTo(User, { foreignKey: 'userId' });
+Notification.belongsTo(Property, { foreignKey: 'propertyId' });
+Notification.belongsTo(MaintenanceRequest, { foreignKey: 'maintenanceRequestId' });
+Notification.belongsTo(Tenant, { foreignKey: 'tenantId' });
 
 // Instance methods
 Notification.prototype.markAsRead = async function() {
-    this.is_read = true;
-    this.read_at = new Date();
+    this.isRead = true;
+    this.readAt = new Date();
     await this.save();
+};
+
+Notification.prototype.isExpired = function() {
+    return this.expiresAt && this.expiresAt < new Date();
 };
 
 // Static methods
 Notification.findUnreadByUser = function(userId) {
     return this.findAll({
         where: {
-            user_id: userId,
-            is_read: false
+            userId,
+            isRead: false,
+            [sequelize.Sequelize.Op.or]: [
+                { expiresAt: null },
+                { expiresAt: { [sequelize.Sequelize.Op.gt]: new Date() } }
+            ]
         },
-        order: [['created_at', 'DESC']],
+        order: [
+            ['priority', 'DESC'],
+            ['createdAt', 'DESC']
+        ],
         include: [
             {
                 model: Property,
-                attributes: ['property_id', 'name', 'address']
+                attributes: ['id', 'name', 'address']
             },
             {
                 model: MaintenanceRequest,
-                attributes: ['request_id', 'category', 'status']
+                attributes: ['id', 'category', 'status']
             }
         ]
     });
@@ -122,18 +198,27 @@ Notification.findUnreadByUser = function(userId) {
 
 Notification.findByUser = function(userId, limit = 50, offset = 0) {
     return this.findAll({
-        where: { user_id: userId },
-        order: [['created_at', 'DESC']],
+        where: {
+            userId,
+            [sequelize.Sequelize.Op.or]: [
+                { expiresAt: null },
+                { expiresAt: { [sequelize.Sequelize.Op.gt]: new Date() } }
+            ]
+        },
+        order: [
+            ['priority', 'DESC'],
+            ['createdAt', 'DESC']
+        ],
         limit,
         offset,
         include: [
             {
                 model: Property,
-                attributes: ['property_id', 'name', 'address']
+                attributes: ['id', 'name', 'address']
             },
             {
                 model: MaintenanceRequest,
-                attributes: ['request_id', 'category', 'status']
+                attributes: ['id', 'category', 'status']
             }
         ]
     });
@@ -143,14 +228,13 @@ Notification.markAllAsRead = async function(userId) {
     const now = new Date();
     await this.update(
         {
-            is_read: true,
-            read_at: now,
-            updated_at: now
+            isRead: true,
+            readAt: now
         },
         {
             where: {
-                user_id: userId,
-                is_read: false
+                userId,
+                isRead: false
             }
         }
     );
@@ -162,13 +246,49 @@ Notification.createBatch = async function(notifications) {
         include: [
             {
                 model: Property,
-                attributes: ['property_id', 'name', 'address']
+                attributes: ['id', 'name', 'address']
             },
             {
                 model: MaintenanceRequest,
-                attributes: ['request_id', 'category', 'status']
+                attributes: ['id', 'category', 'status']
             }
         ]
+    });
+};
+
+Notification.findByType = function(type, limit = 50, offset = 0) {
+    return this.findAll({
+        where: {
+            type,
+            [sequelize.Sequelize.Op.or]: [
+                { expiresAt: null },
+                { expiresAt: { [sequelize.Sequelize.Op.gt]: new Date() } }
+            ]
+        },
+        order: [['createdAt', 'DESC']],
+        limit,
+        offset,
+        include: [
+            {
+                model: User,
+                attributes: ['id', 'firstName', 'lastName', 'email']
+            },
+            {
+                model: Property,
+                attributes: ['id', 'name', 'address']
+            }
+        ]
+    });
+};
+
+Notification.cleanupExpired = async function() {
+    const now = new Date();
+    await this.destroy({
+        where: {
+            expiresAt: {
+                [sequelize.Sequelize.Op.lt]: now
+            }
+        }
     });
 };
 

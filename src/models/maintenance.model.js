@@ -2,6 +2,7 @@ const { DataTypes } = require('sequelize');
 const { sequelize, Sequelize } = require('../config/database.config');
 const User = require('./user.model');
 const Property = require('./property.model');
+const Tenant = require('./tenant.model');
 
 /**
  * MaintenanceRequest Model
@@ -13,36 +14,35 @@ const Property = require('./property.model');
  * 5. Completion with photo evidence
  */
 const MaintenanceRequest = sequelize.define('MaintenanceRequest', {
-    request_id: {
+    id: {
         type: DataTypes.UUID,
         defaultValue: DataTypes.UUIDV4,
         primaryKey: true
     },
-    property_id: {
+    propertyId: {
         type: DataTypes.UUID,
         allowNull: false,
         references: {
             model: Property,
-            key: 'property_id'
+            key: 'id'
         }
     },
-    tenant_id: {
+    tenantId: {
         type: DataTypes.UUID,
         allowNull: false,
         references: {
             model: User,
-            key: 'user_id'
+            key: 'id'
         }
     },
-    service_provider_id: {
+    serviceProviderId: {
         type: DataTypes.UUID,
         allowNull: true,
         references: {
             model: User,
-            key: 'user_id'
+            key: 'id'
         }
     },
-    // Category Selection
     category: {
         type: DataTypes.ENUM(
             'plumbing',
@@ -50,11 +50,12 @@ const MaintenanceRequest = sequelize.define('MaintenanceRequest', {
             'hvac',
             'carpentry',
             'appliance',
+            'structural',
+            'pest_control',
             'other'
         ),
         allowNull: false
     },
-    // Priority Level
     priority: {
         type: DataTypes.ENUM(
             'low',
@@ -64,117 +65,220 @@ const MaintenanceRequest = sequelize.define('MaintenanceRequest', {
         ),
         defaultValue: 'medium'
     },
-    // Request Status Flow
     status: {
         type: DataTypes.ENUM(
-            'submitted',          // Initial submission
-            'pending_confirmation', // Waiting for tenant confirmation
-            'confirmed',          // Tenant confirmed issue
-            'assigned',           // Assigned to service provider
-            'in_progress',        // Work started
-            'completed',          // Work finished
-            'cancelled'           // Request cancelled
+            'submitted',
+            'pending_confirmation',
+            'confirmed',
+            'assigned',
+            'in_progress',
+            'completed',
+            'cancelled'
         ),
         defaultValue: 'submitted'
     },
-    // Issue Description
+    title: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
     description: {
         type: DataTypes.TEXT,
         allowNull: false
     },
-    // Initial Photos
-    issue_photos: {
+    issuePhotos: {
         type: DataTypes.JSON,
-        defaultValue: []
+        defaultValue: [],
+        validate: {
+            isValidPhotos(value) {
+                if (!Array.isArray(value)) {
+                    throw new Error('Photos must be an array');
+                }
+                value.forEach(photo => {
+                    if (!photo.url || !photo.type) {
+                        throw new Error('Invalid photo format');
+                    }
+                });
+            }
+        }
     },
-    // Tenant Confirmation Details
-    confirmation_details: {
+    confirmationDetails: {
         type: DataTypes.JSON,
         allowNull: true,
-        defaultValue: null,
-        comment: 'Additional details provided during confirmation'
+        defaultValue: null
     },
-    confirmed_by: {
+    confirmedBy: {
         type: DataTypes.UUID,
         allowNull: true,
         references: {
             model: User,
-            key: 'user_id'
+            key: 'id'
         }
     },
-    confirmation_date: {
+    confirmationDate: {
         type: DataTypes.DATE,
-        allowNull: true
+        allowNull: true,
+        validate: {
+            isDate: true
+        }
     },
-    // Service Provider Work Details
-    service_notes: {
+    serviceNotes: {
         type: DataTypes.TEXT,
         allowNull: true
     },
-    scheduled_date: {
+    scheduledDate: {
         type: DataTypes.DATE,
-        allowNull: true
+        allowNull: true,
+        validate: {
+            isDate: true
+        }
     },
-    // Completion Evidence
-    completion_photos: {
+    estimatedCost: {
+        type: DataTypes.DECIMAL(10, 2),
+        allowNull: true,
+        validate: {
+            min: 0
+        }
+    },
+    actualCost: {
+        type: DataTypes.DECIMAL(10, 2),
+        allowNull: true,
+        validate: {
+            min: 0
+        }
+    },
+    completionPhotos: {
         type: DataTypes.JSON,
-        defaultValue: []
+        defaultValue: [],
+        validate: {
+            isValidPhotos(value) {
+                if (!Array.isArray(value)) {
+                    throw new Error('Photos must be an array');
+                }
+                value.forEach(photo => {
+                    if (!photo.url || !photo.type) {
+                        throw new Error('Invalid photo format');
+                    }
+                });
+            }
+        }
     },
-    completion_notes: {
+    completionNotes: {
         type: DataTypes.TEXT,
         allowNull: true
     },
-    completed_date: {
+    completedDate: {
         type: DataTypes.DATE,
+        allowNull: true,
+        validate: {
+            isDate: true
+        }
+    },
+    cancellationReason: {
+        type: DataTypes.TEXT,
         allowNull: true
     },
-    // Timestamps
-    created_at: {
-        type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
+    cancelledBy: {
+        type: DataTypes.UUID,
+        allowNull: true,
+        references: {
+            model: User,
+            key: 'id'
+        }
     },
-    updated_at: {
+    cancellationDate: {
         type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
+        allowNull: true,
+        validate: {
+            isDate: true
+        }
     }
 }, {
+    timestamps: true,
+    underscored: true,
     hooks: {
-        beforeUpdate: (request) => {
-            request.updated_at = new Date();
+        beforeCreate: async (request) => {
+            const tenant = await Tenant.findOne({
+                where: {
+                    userId: request.tenantId,
+                    propertyId: request.propertyId,
+                    status: 'active'
+                }
+            });
+            if (!tenant) {
+                throw new Error('No active lease found for this tenant and property');
+            }
+        },
+        afterCreate: async (request) => {
+            await Property.update(
+                { status: 'maintenance' },
+                { where: { id: request.propertyId } }
+            );
+        },
+        afterUpdate: async (request) => {
+            if (request.status === 'completed' || request.status === 'cancelled') {
+                await Property.update(
+                    { status: 'occupied' },
+                    { where: { id: request.propertyId } }
+                );
+            }
         }
-    }
+    },
+    indexes: [
+        {
+            fields: ['property_id']
+        },
+        {
+            fields: ['tenant_id']
+        },
+        {
+            fields: ['service_provider_id']
+        },
+        {
+            fields: ['status']
+        },
+        {
+            fields: ['category']
+        }
+    ]
 });
 
 // Define relationships
-MaintenanceRequest.belongsTo(Property, { foreignKey: 'property_id' });
-MaintenanceRequest.belongsTo(User, { as: 'tenant', foreignKey: 'tenant_id' });
-MaintenanceRequest.belongsTo(User, { as: 'service_provider', foreignKey: 'service_provider_id' });
+MaintenanceRequest.belongsTo(Property, { foreignKey: 'propertyId' });
+MaintenanceRequest.belongsTo(User, { as: 'tenant', foreignKey: 'tenantId' });
+MaintenanceRequest.belongsTo(User, { as: 'serviceProvider', foreignKey: 'serviceProviderId' });
+MaintenanceRequest.belongsTo(Tenant, {
+    foreignKey: 'tenantId',
+    targetKey: 'userId'
+});
 
-// Instance methods for request flow
+// Instance methods
 MaintenanceRequest.prototype.submitRequest = async function(photos = []) {
     this.status = 'pending_confirmation';
     if (photos.length > 0) {
-        this.issue_photos = photos;
+        this.issuePhotos = photos;
     }
     await this.save();
 };
 
 MaintenanceRequest.prototype.confirmRequest = async function(userId, confirmationDetails) {
     this.status = 'confirmed';
-    this.confirmed_by = userId;
-    this.confirmation_date = new Date();
-    this.confirmation_details = {
+    this.confirmedBy = userId;
+    this.confirmationDate = new Date();
+    this.confirmationDetails = {
         ...confirmationDetails,
-        confirmed_at: new Date()
+        confirmedAt: new Date()
     };
     await this.save();
 };
 
-MaintenanceRequest.prototype.assignServiceProvider = async function(serviceProviderId, scheduledDate = null) {
-    this.service_provider_id = serviceProviderId;
+MaintenanceRequest.prototype.assignServiceProvider = async function(serviceProviderId, scheduledDate = null, estimatedCost = null) {
+    this.serviceProviderId = serviceProviderId;
     this.status = 'assigned';
     if (scheduledDate) {
-        this.scheduled_date = scheduledDate;
+        this.scheduledDate = scheduledDate;
+    }
+    if (estimatedCost) {
+        this.estimatedCost = estimatedCost;
     }
     await this.save();
 };
@@ -183,10 +287,10 @@ MaintenanceRequest.prototype.updateStatus = async function(newStatus, notes = nu
     this.status = newStatus;
     if (notes) {
         if (newStatus === 'completed') {
-            this.completion_notes = notes;
-            this.completed_date = new Date();
+            this.completionNotes = notes;
+            this.completedDate = new Date();
         } else {
-            this.service_notes = notes;
+            this.serviceNotes = notes;
         }
     }
     await this.save();
@@ -194,40 +298,58 @@ MaintenanceRequest.prototype.updateStatus = async function(newStatus, notes = nu
 
 MaintenanceRequest.prototype.addPhotos = async function(photos, isCompletion = false) {
     if (isCompletion) {
-        this.completion_photos = [...this.completion_photos, ...photos];
-        if (!this.completed_date) {
-            this.completed_date = new Date();
+        this.completionPhotos = [...this.completionPhotos, ...photos];
+        if (!this.completedDate) {
+            this.completedDate = new Date();
         }
     } else {
-        this.issue_photos = [...this.issue_photos, ...photos];
+        this.issuePhotos = [...this.issuePhotos, ...photos];
     }
     await this.save();
 };
 
-// Static methods for querying
+MaintenanceRequest.prototype.cancel = async function(userId, reason) {
+    this.status = 'cancelled';
+    this.cancelledBy = userId;
+    this.cancellationDate = new Date();
+    this.cancellationReason = reason;
+    await this.save();
+};
+
+MaintenanceRequest.prototype.setActualCost = async function(amount, notes = null) {
+    this.actualCost = amount;
+    if (notes) {
+        this.completionNotes = this.completionNotes ? 
+            `${this.completionNotes}\n${notes}` : 
+            notes;
+    }
+    await this.save();
+};
+
+// Static methods
 MaintenanceRequest.findByProperty = function(propertyId) {
     return this.findAll({
-        where: { property_id: propertyId },
+        where: { propertyId },
         include: [
             {
                 model: User,
                 as: 'tenant',
-                attributes: ['user_id', 'first_name', 'last_name', 'email']
+                attributes: ['id', 'firstName', 'lastName', 'email']
             },
             {
                 model: User,
-                as: 'service_provider',
-                attributes: ['user_id', 'first_name', 'last_name', 'email']
+                as: 'serviceProvider',
+                attributes: ['id', 'firstName', 'lastName', 'email']
             }
         ],
-        order: [['created_at', 'DESC']]
+        order: [['createdAt', 'DESC']]
     });
 };
 
 MaintenanceRequest.findByServiceProvider = function(serviceProviderId) {
     return this.findAll({
         where: {
-            service_provider_id: serviceProviderId,
+            serviceProviderId,
             status: {
                 [Sequelize.Op.in]: ['assigned', 'in_progress']
             }
@@ -235,15 +357,58 @@ MaintenanceRequest.findByServiceProvider = function(serviceProviderId) {
         include: [
             {
                 model: Property,
-                attributes: ['property_id', 'name', 'address']
+                attributes: ['id', 'name', 'address']
             },
             {
                 model: User,
                 as: 'tenant',
-                attributes: ['user_id', 'first_name', 'last_name', 'email']
+                attributes: ['id', 'firstName', 'lastName', 'email']
             }
         ],
-        order: [['scheduled_date', 'ASC']]
+        order: [['scheduledDate', 'ASC']]
+    });
+};
+
+MaintenanceRequest.findByTenant = function(tenantId) {
+    return this.findAll({
+        where: { tenantId },
+        include: [
+            {
+                model: Property,
+                attributes: ['id', 'name', 'address']
+            },
+            {
+                model: User,
+                as: 'serviceProvider',
+                attributes: ['id', 'firstName', 'lastName', 'email']
+            }
+        ],
+        order: [['createdAt', 'DESC']]
+    });
+};
+
+MaintenanceRequest.findPending = function() {
+    return this.findAll({
+        where: {
+            status: {
+                [Sequelize.Op.in]: ['submitted', 'pending_confirmation', 'confirmed']
+            }
+        },
+        include: [
+            {
+                model: Property,
+                attributes: ['id', 'name', 'address']
+            },
+            {
+                model: User,
+                as: 'tenant',
+                attributes: ['id', 'firstName', 'lastName', 'email']
+            }
+        ],
+        order: [
+            ['priority', 'DESC'],
+            ['createdAt', 'ASC']
+        ]
     });
 };
 
