@@ -27,6 +27,12 @@ const testConnection = async () => {
     try {
         await sequelize.authenticate();
         logger.info('Database connection has been established successfully.');
+        
+        // Only sync with alter in development
+        if (process.env.NODE_ENV === 'development') {
+            await sequelize.sync({ alter: true });
+            logger.info('Database models synchronized in development mode.');
+        }
     } catch (error) {
         logger.error('Unable to connect to the database:', error);
         process.exit(1);

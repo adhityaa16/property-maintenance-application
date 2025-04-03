@@ -47,6 +47,10 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         logger.info(`Client disconnected: ${socket.id}`);
     });
+
+    socket.on('error', (error) => {
+        logger.error('Socket error:', error);
+    });
 });
 
 // Error handling middleware
@@ -67,9 +71,11 @@ async function startServer() {
         await sequelize.authenticate();
         logger.info('Database connection established successfully.');
 
-        // Sync database models
-        await sequelize.sync({ alter: true });
-        logger.info('Database models synchronized.');
+        // Only sync with alter in development
+        if (process.env.NODE_ENV === 'development') {
+            await sequelize.sync({ alter: true });
+            logger.info('Database models synchronized in development mode.');
+        }
 
         // Start server
         httpServer.listen(PORT, () => {
@@ -80,5 +86,17 @@ async function startServer() {
         process.exit(1);
     }
 }
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+    logger.error('Uncaught Exception:', error);
+    process.exit(1);
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (error) => {
+    logger.error('Unhandled Rejection:', error);
+    process.exit(1);
+});
 
 startServer();

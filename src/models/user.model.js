@@ -4,7 +4,7 @@ const bcrypt = require('bcryptjs');
 const { Sequelize } = require('sequelize');
 
 const User = sequelize.define('User', {
-    user_id: {
+    id: {
         type: DataTypes.UUID,
         defaultValue: DataTypes.UUIDV4,
         primaryKey: true
@@ -21,84 +21,84 @@ const User = sequelize.define('User', {
         type: DataTypes.STRING,
         allowNull: false
     },
-    first_name: {
+    firstName: {
         type: DataTypes.STRING,
         allowNull: false
     },
-    last_name: {
+    lastName: {
         type: DataTypes.STRING,
         allowNull: false
     },
     role: {
-        type: DataTypes.ENUM('owner', 'tenant', 'service_provider'),
+        type: DataTypes.ENUM('owner', 'tenant', 'service_provider', 'admin'),
         allowNull: false
     },
-    phone_number: {
+    phoneNumber: {
         type: DataTypes.STRING,
         allowNull: true
     },
-    company_name: {
+    companyName: {
         type: DataTypes.STRING,
         allowNull: true
     },
-    company_registration: {
+    companyRegistration: {
         type: DataTypes.STRING,
         allowNull: true
     },
-    service_categories: {
+    serviceCategories: {
         type: DataTypes.JSON,
         allowNull: true,
         defaultValue: []
     },
-    is_email_verified: {
+    isVerified: {
         type: DataTypes.BOOLEAN,
         defaultValue: false
     },
-    email_verification_token: {
+    emailVerificationToken: {
         type: DataTypes.STRING,
         allowNull: true
     },
-    email_verification_expires: {
+    emailVerificationExpires: {
         type: DataTypes.DATE,
         allowNull: true
     },
-    reset_password_token: {
+    resetPasswordToken: {
         type: DataTypes.STRING,
         allowNull: true
     },
-    reset_password_expires: {
+    resetPasswordExpires: {
         type: DataTypes.DATE,
         allowNull: true
     },
-    is_approved: {
+    isApproved: {
         type: DataTypes.BOOLEAN,
         defaultValue: false
     },
-    approved_by: {
+    approvedBy: {
         type: DataTypes.UUID,
         allowNull: true,
         references: {
             model: 'User',
-            key: 'user_id'
+            key: 'id'
         }
     },
-    approved_at: {
+    approvedAt: {
         type: DataTypes.DATE,
         allowNull: true
     },
-    is_active: {
+    isActive: {
         type: DataTypes.BOOLEAN,
         defaultValue: true
     },
-    last_login: {
+    lastLogin: {
         type: DataTypes.DATE,
         allowNull: true
     },
-    created_at: {
+    createdAt: {
         type: DataTypes.DATE,
         defaultValue: DataTypes.NOW
     },
-    updated_at: {
+    updatedAt: {
         type: DataTypes.DATE,
         defaultValue: DataTypes.NOW
     }
@@ -109,21 +109,27 @@ const User = sequelize.define('User', {
                 user.password = await bcrypt.hash(user.password, 10);
             }
             if (user.changed()) {
-                user.updated_at = new Date();
+                user.updatedAt = new Date();
             }
         }
     }
 });
 
 // Instance methods
-User.prototype.comparePassword = async function(candidatePassword) {
-    return bcrypt.compare(candidatePassword, this.password);
+User.prototype.validatePassword = async function(password) {
+    return bcrypt.compare(password, this.password);
+};
+
+User.prototype.toJSON = function() {
+    const values = { ...this.get() };
+    delete values.password;
+    return values;
 };
 
 User.prototype.approve = async function(approverId) {
-    this.is_approved = true;
-    this.approved_by = approverId;
-    this.approved_at = new Date();
+    this.isApproved = true;
+    this.approvedBy = approverId;
+    this.approvedAt = new Date();
     await this.save();
 };
 
@@ -135,12 +141,12 @@ User.findByEmail = function(email) {
 User.findServiceProviders = function(categories = null) {
     const where = { 
         role: 'service_provider',
-        is_approved: true,
-        is_active: true
+        isApproved: true,
+        isActive: true
     };
     
     if (categories) {
-        where.service_categories = {
+        where.serviceCategories = {
             [Sequelize.Op.overlap]: categories
         };
     }
@@ -152,8 +158,8 @@ User.findPendingApprovals = function() {
     return this.findAll({
         where: {
             role: 'service_provider',
-            is_approved: false,
-            is_active: true
+            isApproved: false,
+            isActive: true
         }
     });
 };
